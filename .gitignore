@@ -1,0 +1,5 @@
+# 抓取产物不入库（由 Action 每次重抓）
+sources/
+__pycache__/
+*.pyc
+.env
