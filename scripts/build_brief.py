@@ -34,6 +34,8 @@ TEMPLATE_HINT = """格式（严格遵守）：
   ③ 边界（适用条件、容易被误读的地方、作者没说清的）
 - 每条 **320–420 个汉字**（不含标点、链接、来源行），条数 16–20 条。字数不足视为不合格：② 段要写足 4–6 句细节（机制、数字、对比、限制条件），不许用一句话概括。
 - 头条区放论文与一手技术长文，公司公告放最后。
+- 若素材含「中文源」一组：从中挑 3–5 条单独成节「中文动态」，放在主体区靠前位置；**保留中文标题原文**，不要翻译成英文再翻回来。
+- 中文条目同样写满 320–420 字，**不要因为素材是摘要就写得比英文条目短**。
 - 禁止表格；禁止「值得关注」「建议收藏」这类推荐语。
 - 禁止编造：数字、引语、机构名必须来自素材。
 - **不要在每条都写「素材未提供」**：只有当核心结论或关键数字确实缺失时才写一次「素材未提供 X」，其余边界写实质内容（适用条件、误读风险）。重复同一句套话视为不合格。"""
@@ -97,6 +99,10 @@ def gather(raw_dir, limit=None):
         return got[:n]
 
     tech = pick(["lilian", "deepseek", "qwen"], 4)
+    CN_KW = ("AI", "大模型", "模型", "智能体", "Agent", "LLM", "GPT", "Claude", "Gemini",
+             "推理", "训练", "多模态", "开源", "算力", "芯片", "微调", "RAG", "向量", "提示词")
+    cn = [x for x in pick(["infoq", "kr36", "ithome"], 12)
+          if any(k.lower() in (x["text"][:400] + x["title"]).lower() for k in CN_KW)][:5]
     hn = pick(["hn-story"], 6)
     official = pick(["anthropic", "openai"], 10)
     other = pick(["simon", "tldr"], 2)
@@ -110,6 +116,8 @@ def gather(raw_dir, limit=None):
         sections.append(("论文（arXiv cs.CL）", papers))
     if tech:
         sections.append(("一手技术文", tech))
+    if cn:
+        sections.append(("中文源（InfoQ / 36氪 / IT之家，仅 AI 相关）", cn))
     if hn:
         sections.append(("社区讨论（Hacker News）", hn))
     if official:
