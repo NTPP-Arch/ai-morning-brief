@@ -62,11 +62,25 @@ SHORT_RULES = """## 短条目的格式（每条 2–3 句，比速览厚）
 - 短条目只能用 `-` 列表，**不许用 `###` 标题**，也不许新建「短条目」「其他」这类小标题。
 - 短条目是「其余值得知道的」，不要在这里重复本块深读讲过的事。"""
 
+PAPER_RULES = """## 论文条目怎么写（读者不是研究者，必须能看懂）
+### 标题：用中文说人话，带上「解决了什么麻烦 + 一个关键数字」
+不要直接抄英文论文标题，也不要堆模型名。反例：「Subquadratic Attention with a Hierarchical Tree-Structured Indexer」。
+正例：「长上下文太贵，他们让模型先建一棵目录树再翻」。
 
-def bucket_prompt(date, name, heading, body, target, deep, short, extra=""):
+**这解决什么麻烦**：先说人遇到的麻烦（贵、慢、不准、看不懂内部怎么想），一句到两句，不出现术语。
+**他们怎么做的**：用日常比喻讲清机制（例如「像图书馆先看索引再取书」），再用一句话把比喻落回技术，术语第一次出现时必须立刻用一句话解释。
+**结果与代价**：给数字，同时说清这个数字是在什么任务、跟谁比、什么条件下得到的；顺带说清代价（显存、训练量、额外步骤）。
+**⚠️ 边界 / 对谁有用**：什么情况下不成立；这件事对做产品的人、对普通用户分别意味着什么。写不出就直接说「对普通用户暂时没有直接影响」。
+**一句话点评**：明确站边。
+
+每条 **350–450 个汉字**。禁用：「显著提升」「范式转变」「重新定义」；不许出现看不懂就没解释的缩写（MoE、KV cache、RLHF 等首次出现必须解释）。
+**论文只占整份早报的一小块**，不要为了凑数把看不懂的论文写进来——素材里挑不出能讲清的，就少写。"""
+
+
+def bucket_prompt(date, name, heading, body, target, deep, short, extra="", rules=None):
     return """今天是 {date}。你是中文 AI 早报主编，这一轮**只写下面这一块**：{name}。
 
-整份早报正文目标 10000–11000 字（读者在地铁上读 40–50 分钟，随时到站放下）。
+整份早报正文目标 13000–14000 字（读者在地铁上读 50 分钟，随时到站放下）。
 **这一块负责 {target} 字**。写不到这个量就是没写完——回去把每条写厚（补机制、数字、对比、限制条件），
 不是少写几条，也不是灌水复述。
 
@@ -80,7 +94,7 @@ def bucket_prompt(date, name, heading, body, target, deep, short, extra=""):
 ## 素材（只准用这些）
 {material}
 """.format(date=date, name=name, heading=heading, target=target, deep=deep, short=short,
-           extra=extra, rules=DEEP_RULES, rules2=COMMON_RULES, material=body)
+           extra=extra, rules=rules or DEEP_RULES, rules2=COMMON_RULES, material=body)
 
 
 EDITOR_PROMPT = """下面是今天（{date}）早报正文的初稿，分 {k} 块，正文约 {n} 字。
@@ -88,9 +102,9 @@ EDITOR_PROMPT = """下面是今天（{date}）早报正文的初稿，分 {k} �
 请**只输出三块内容**，不要重复也不要改写正文：
 
 1. `## 🚇 3 分钟速览（今天记这几条）`
-   8 条，编号列表，每条格式：`**一句话事实**：关键数字或细节 → 一句判断`，每条 40–70 字。
+   10 条，编号列表，每条格式：`**一句话事实**：关键数字或细节 → 一句判断`，每条 40–70 字。
    **不要写「一句话点评：」这几个字**，判断直接用「→」接在后面。
-   8 条要覆盖不同板块（论文 / 中文 / 官方 / 社区都要有），不要都来自同一块。
+   10 条要覆盖不同板块（论文 / 中文 / 官方 / 社区都要有），不要都来自同一块。
 
 2. `## 🔭 本周看点`
    只有当正文里确实出现**确定日期**的事件时才写，3–5 行：`- 时间｜事件｜关注点`。
@@ -214,16 +228,16 @@ def gather(raw_dir, limit=None):
     def pick(prefixes, n):
         return [x for x in idx if any(x["name"].startswith(p) for p in prefixes)][:n]
 
-    papers = parse_arxiv(raw_dir, limit or 14)
+    papers = parse_arxiv(raw_dir, limit or 5)
     tech = pick(["lilian", "deepseek", "qwen"], 4)
 
     cn_files = ["qbitai.xml", "infoq.xml", "kr36.xml", "ithome.xml", "sinatech.xml"]
-    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 6) for f in cn_files]
-    cn = feeds.round_robin(cn_groups, 3)[:14]
+    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 8) for f in cn_files]
+    cn = feeds.round_robin(cn_groups, 4)[:18]
 
     en_files = ["techcrunch.xml", "thedecoder.xml"]
-    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 6) for f in en_files]
-    en_media = feeds.round_robin(en_groups, 3)[:6]
+    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 8) for f in en_files]
+    en_media = feeds.round_robin(en_groups, 4)[:8]
 
     hn = pick(["hn-story"], 5)
     official = pick(["anthropic"], 10) + pick(["openai"], 3)
@@ -233,13 +247,14 @@ def gather(raw_dir, limit=None):
     b2 = cn + en_media + hn
     b3 = official + other
     return [
-        ("论文与技术长文", "## 📰 论文与架构（arXiv cs.CL / 一手技术文）", b1, "4200", 7, 5, ""),
-        ("中文动态与英文科技媒体", None, b2, "3800", 5, 8,
+        ("论文（少量，讲人话）与一手技术文",
+         "## 📰 论文与技术（每条都能看懂）", b1, "2400", 3, 4, "", PAPER_RULES),
+        ("中文动态与英文科技媒体", None, b2, "6000", 6, 12,
          "本块要拆成两个板块，依次输出：\n"
-         "`## 📰 中文动态`（量子位 / InfoQ / 36氪 / IT之家 / 新浪科技，**至少 5 条**，保留中文标题原文）\n"
+         "`## 📰 中文动态`（量子位 / InfoQ / 36氪 / IT之家 / 新浪科技，**至少 8 条**，保留中文标题原文）\n"
          "`## 📰 英文媒体与社区`（TechCrunch / The Decoder / Hacker News）\n"
-         "同一事件中英文都有时，用中文报道补国内厂商动作、资本与政策细节。"),
-        ("官方公告与产业", "## 📰 官方公告与产业", b3, "2800", 4, 6, ""),
+         "同一事件中英文都有时，用中文报道补国内厂商动作、资本与政策细节。", DEEP_RULES),
+        ("官方公告与产业", "## 📰 官方公告与产业", b3, "5000", 6, 8, "", DEEP_RULES),
     ]
 
 
@@ -325,7 +340,7 @@ def main():
     cache = load_articles(raw_dir)
 
     if args.dry:
-        name, heading, items, target, deep, short, extra = buckets[args.dry - 1]
+        name, heading, items, target, deep, short, extra, rules = buckets[args.dry - 1]
         material = render(items, cache)
         print("块 %d %s：%d 条素材，渲染 %d 字符" % (args.dry, name, len(items), len(material)))
         print(material[:2000])
@@ -339,7 +354,7 @@ def main():
         return 1
 
     bodies = []
-    for i, (name, heading, items, target, deep, short, extra) in enumerate(buckets, 1):
+    for i, (name, heading, items, target, deep, short, extra, rules) in enumerate(buckets, 1):
         if not items:
             bodies.append("## 📰 %s\n\n> 素材不足：今天没有可用素材。" % name)
             continue
@@ -350,7 +365,8 @@ def main():
             out = sanitize(call_llm([{"role": "system", "content": SYSTEM},
                                      {"role": "user",
                                       "content": bucket_prompt(date, name, heading or "（两个板块，见下）",
-                                                               material, target, deep, short, extra)}],
+                                                               material, target, deep, short, extra,
+                                                               rules)}],
                                     base, key, model))
         except RuntimeError as exc:      # 单块失败不拖垮整份早报
             print("      本块放弃：%s" % exc, flush=True)
