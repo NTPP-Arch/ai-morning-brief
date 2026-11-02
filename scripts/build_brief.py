@@ -63,6 +63,8 @@ TEMPLATE_HINT = """你要写的是一份「地铁版」早报：读者在通勤�
 - 属于传闻、爆料、未官宣的，必须在 ⚠️ 边界段写清「未获官方确认」。
 - 不许写「值得关注」「建议收藏」这类推荐语；要写判断就写具体的一句话点评。
 - 中文条目用中文标题原文，不要翻译。
+- 若素材含「中文源」一组：**必须单独成一节「中文动态」，至少 5 条**，放在主体区第 2 或第 3 个板块的位置。同一事件如中英文源都有，优先用中文报道补细节（国内厂商动作、资本、政策通常只有中文源）。
+- 若素材含「英文科技媒体」一组：挑 2–4 条并入对应板块，不要单独成节。
 - **每条深读必须带一行来源**：`来源：域名`（从给的 URL 里取域名即可，例 `来源：arxiv.org`）。
 - **小数只能照抄**：素材写「约四成」就写「约四成」，不许换算成 40%、更不许写成 43.3%。只有素材原文出现的数字才能以小数形式出现。
 - **「据报道」「消息称」「社区爆料」不算独立信源**：若某条只有这类来源，必须写「仅二手信源」。
@@ -153,8 +155,11 @@ def gather(raw_dir, limit=None):
     tech = pick(["lilian", "deepseek", "qwen"], 4)
     CN_KW = ("AI", "大模型", "模型", "智能体", "Agent", "LLM", "GPT", "Claude", "Gemini",
              "推理", "训练", "多模态", "开源", "算力", "芯片", "微调", "RAG", "向量", "提示词")
-    cn = [x for x in pick(["infoq", "kr36", "ithome"], 12)
-          if any(k.lower() in (x["text"][:400] + x["title"]).lower() for k in CN_KW)][:5]
+    cn = [x for x in pick(["qbitai", "infoq", "kr36", "ithome", "sinatech"], 26)
+          if any(k.lower() in (x["text"][:400] + x["title"]).lower() for k in CN_KW)][:10]
+    en_media = [x for x in pick(["techcrunch", "thedecoder"], 12)
+                if any(k.lower() in (x["text"][:400] + x["title"]).lower()
+                       for k in ("ai", "model", "agent", "llm", "openai", "anthropic", "gpt"))][:6]
     hn = pick(["hn-story"], 6)
     official = pick(["anthropic", "openai"], 10)
     other = pick(["simon", "tldr"], 2)
@@ -169,7 +174,9 @@ def gather(raw_dir, limit=None):
     if tech:
         sections.append(("一手技术文", tech))
     if cn:
-        sections.append(("中文源（InfoQ / 36氪 / IT之家，仅 AI 相关）", cn))
+        sections.append(("中文源（量子位 / InfoQ / 36氪 / IT之家 / 新浪科技，已按 AI 关键词筛）", cn))
+    if en_media:
+        sections.append(("英文科技媒体（TechCrunch / The Decoder）", en_media))
     if hn:
         sections.append(("社区讨论（Hacker News）", hn))
     if official:
