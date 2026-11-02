@@ -30,6 +30,10 @@ SOURCES = {
     "qwen": ("https://qwenlm.github.io/blog/index.xml", "qwen.xml"),
     "lilian": ("https://lilianweng.github.io/index.xml", "lilian.xml"),
     "deepseek": ("https://api-docs.deepseek.com/news", "deepseek.html"),
+    # 中文源（2026-11-02 实测）：机器之心/量子位 RSS 是空壳或 000，改用这两家带 AI 条目的综合技术源
+    "infoq": ("https://www.infoq.cn/feed", "infoq.xml"),
+    "kr36": ("https://www.36kr.com/feed", "kr36.xml"),
+    "ithome": ("https://www.ithome.com/rss/", "ithome.xml"),
     "hn": ("https://hacker-news.firebaseio.com/v0/topstories.json", "hn-topstories.json"),
     "tldr": ("https://tldr.tech/ai", "tldr.html"),
     "substack": ("https://importai.substack.com/feed", "substack.xml"),
@@ -40,6 +44,7 @@ SOURCE_PRIORITY = {
     "anthropic": "P0", "openai": "P0", "arxiv": "P0",
     "qwen": "archive", "lilian": "P0", "deepseek": "P0",
     "hn": "P1", "tldr": "P1", "simon": "P1", "substack": "P1",
+    "infoq": "P1", "kr36": "P1", "ithome": "P1",
 }
 RETRIES_BY_PRIORITY = {"P0": 3, "P1": 1, "archive": 1}
 
@@ -411,6 +416,7 @@ class Run:
             rows += ["本轮没有成功素材，详见 ../fetch-status.md。", ""]
         self.write_if_changed(self.raw_dir / "INDEX.md", "\n".join(rows).rstrip() + "\n")
         primary = [entries[k] for k in ("anthropic", "openai", "arxiv", "lilian", "deepseek",
+                                        "infoq", "kr36", "ithome",
                                         "hn-top", "tldr", "substack", "simon") if k in entries]
         ok = sum(m["state"] in ("ok", "empty") for m in primary)
         failures = [(k, v) for k, v in sorted(entries.items()) if v["state"] == "failed"]
