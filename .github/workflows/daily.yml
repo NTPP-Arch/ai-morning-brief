@@ -1,0 +1,72 @@
+name: daily-brief
+
+on:
+  schedule:
+    # 22:00 UTC = 次日 06:00 北京时间。GitHub 的定时任务可能延迟几分钟到几十
+    # 分钟（高峰期更明显），所以这里提前到 06:00，留出余量。
+    - cron: "0 22 * * *"
+  workflow_dispatch:      # 支持手动触发，方便调试
+
+permissions:
+  contents: write         # 把当天成稿提交回仓库
+  pages: write            # 部署 GitHub Pages
+  id-token: write
+
+concurrency:
+  group: daily-brief
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 抓取当日素材
+        run: |
+          DATE=$(TZ=Asia/Shanghai date +%F)
+          echo "DATE=$DATE" >> "$GITHUB_ENV"
+          echo "抓取日期：$DATE"
+          python scripts/fetch.py "$DATE"
+
+      - name: 生成早报（模型出稿）
+        env:
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          python scripts/build_brief.py "$DATE"
+          mkdir -p docs
+          cp "briefs/$DATE.html" docs/index.html
+          cp "briefs/$DATE.html" "docs/$DATE.html"
+          ls -la docs
+
+      - name: 提交成稿回仓库
+        run: |
+          git config user.name "brief-bot"
+          git config user.email "brief-bot@users.noreply.github.com"
+          git add -A briefs docs
+          if git diff --cached --quiet; then
+            echo "无变更，跳过提交"
+          else
+            git commit -m "chore: 早报 $DATE"
+            git push
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
