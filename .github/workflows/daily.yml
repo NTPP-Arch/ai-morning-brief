@@ -2,9 +2,9 @@ name: daily-brief
 
 on:
   schedule:
-    # 22:00 UTC = 次日 06:00 北京时间。
-    # GitHub 定时任务在整点高峰期可能延迟几十分钟，所以留了余量；建议 06:30 后再打开页面。
-    - cron: "0 22 * * *"
+    # 21:30 UTC = 05:30 北京时间。GitHub 定时任务常有几分钟到几十分钟延迟，
+    # 所以比"早上要看"提前，正常 05:40 前后就能出稿。
+    - cron: "30 21 * * *"
   workflow_dispatch:      # 手动触发，方便调试
 
 permissions:
@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DATE: ""            # 每步都会重算，这里只做占位，避免未定义变量报错
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +27,7 @@ jobs:
           python-version: "3.12"
 
       - name: 抓取当日素材
+        continue-on-error: true
         run: |
           DATE=$(TZ=Asia/Shanghai date +%F)
           echo "DATE=$DATE" >> "$GITHUB_ENV"
@@ -32,22 +35,40 @@ jobs:
           python scripts/fetch.py "$DATE"
 
       - name: 抽取文章正文（让素材从摘要变成全文）
+        continue-on-error: true
         run: |
           python scripts/extract_articles.py "$DATE" --budget 300 || echo "正文抽取部分失败，继续用摘要"
 
       - name: 模型出稿
+        continue-on-error: true
         env:
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python scripts/build_brief.py "$DATE"
+
+      - name: 发布到 docs（今天没出稿就用最近一期兜底）
+        if: always()
         run: |
-          python scripts/build_brief.py "$DATE"
           mkdir -p docs
-          cp "briefs/$DATE.html" docs/index.html
-          cp "briefs/$DATE.html" "docs/$DATE.html"
-          cp "briefs/$DATE.md"   "docs/$DATE.md" || true
+          if [ -f "briefs/$DATE.html" ]; then
+            cp "briefs/$DATE.html" docs/index.html
+            cp "briefs/$DATE.html" "docs/$DATE.html"
+            cp "briefs/$DATE.md"   "docs/$DATE.md" || true
+            echo "已发布 $DATE"
+          else
+            LAST=$(ls -1t briefs/*.html 2>/dev/null | head -1 || true)
+            if [ -n "$LAST" ]; then
+              echo "::warning::今天出稿失败，用最近一期兜底：$LAST"
+              cp "$LAST" docs/index.html
+            else
+              echo "::error::没有任何成稿可兜底"
+              exit 1
+            fi
+          fi
 
       - name: 提交并由 Pages 发布
+        if: always()
         run: |
           git config user.name "brief-bot"
           git config user.email "brief-bot@users.noreply.github.com"
@@ -55,6 +76,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
           else
-            git commit -m "chore: 早报 $DATE"
+            git commit -m "chore: 早报 ${DATE:-unknown}"
             git push
           fi
