@@ -264,6 +264,9 @@ def importance(title):
     score = sum(w for k, w in WEIGHTS if k in title)
     if any(k in title for k in COLLECT):
         score -= 8
+    # 预测/报告类不是「今天发生的事」，可以进主体，但别占头条
+    if any(k in title for k in ("预测", "预计", "展望", "调研", "报告称", "研究显示")):
+        score -= 6
     return score
 
 
