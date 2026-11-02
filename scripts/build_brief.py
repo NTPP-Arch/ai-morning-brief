@@ -275,10 +275,12 @@ SYSTEM = ("你是中文 AI 早报主编。你只依据给定素材写作，不�
 
 
 def sanitize(md):
-    """去掉表格（手机竖屏禁表格）与代码围栏残留。"""
+    """去掉表格（手机竖屏禁表格）、代码围栏，以及「深读｜」「短条目｜」这类元标签。"""
     lines = [ln for ln in (md or "").split("\n") if not ln.strip().startswith("|")]
     out = "\n".join(lines)
     out = re.sub(r"```[a-zA-Z]*\n?", "", out)
+    out = re.sub(r"^(#{1,4}\s*)(深读|短条目)\s*[｜|]\s*", r"\1", out, flags=re.M)
+    out = re.sub(r"^(#{1,4}\s*)(深读|短条目)\s*[：:]\s*", r"\1", out, flags=re.M)
     return out.strip()
 
 
