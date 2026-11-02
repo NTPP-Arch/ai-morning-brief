@@ -3,12 +3,16 @@
 
 为什么需要：
     fetch.py 只存了 RSS/列表页的摘要（每条一两百字），模型拿着摘要只能写出
-    300 字的简报。要写出有细节的长文，必须有正文。
+    3000 字的简报。要写出 7000 字的中铁版，必须有正文。
+
+为什么按组配额：
+    2026-11-02 实测：按 INDEX 顺序抓 16 条，全被 anthropic 占满，中文源和
+    英文媒体一篇正文都没有，成稿只有 3288 字。所以按「官方 / 中文 / 英文媒体 /
+    一手技术文」分组各取 N 条。
 
 用法：
-    python scripts/extract_articles.py 2026-11-16            # 抓当天索引里的条目
-    python scripts/extract_articles.py 2026-11-16 --max 15   # 限制条数
-    python scripts/extract_articles.py 2026-11-16 --only-zh  # 只抓中文源
+    python scripts/extract_articles.py 2026-11-16
+    python scripts/extract_articles.py 2026-11-16 --budget 240   # 总耗时上限（秒）
 
 产出：
     sources/<date>/articles/<slug>.md   每条一个文件，含标题、URL、正文段落
@@ -26,11 +30,17 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 UA = "Mozilla/5.0 (compatible; MorningBriefReader/1.0)"
 
-# 正文段落的最小长度：过滤导航、按钮、版权行
-MIN_PARA = 60
-MAX_CHARS = 4000
+MIN_PARA = 60          # 正文段落最小长度：过滤导航、按钮、版权行
+MAX_CHARS = 4000       # 单篇正文上限
 SKIP_HOSTS = ("arxiv.org", "export.arxiv.org", "hacker-news.firebaseio.com",
-              "tavily.com", "openai.com")  # openai 正文 403
+              "openai.com")  # arXiv 摘要已够；HN 是评论不是正文；openai 正文 403
+
+GROUPS = [
+    ("官方", ("anthropic", "openai"), 6),
+    ("中文", ("qbitai", "infoq", "kr36", "ithome", "sinatech"), 8),
+    ("英文媒体", ("techcrunch", "thedecoder"), 4),
+    ("一手技术文", ("lilian", "deepseek", "qwen", "simon"), 3),
+]
 
 
 def clean(text):
@@ -41,7 +51,7 @@ def clean(text):
 
 
 def paragraphs(raw):
-    """优先取 <p>；取不到再退回按行切。"""
+    """优先取 <p>；取不到再退回按句切。"""
     out = []
     for m in re.finditer(r"<p[^>]*>(.*?)</p>", raw, re.S | re.I):
         t = clean(m.group(1))
@@ -56,13 +66,13 @@ def paragraphs(raw):
 
 
 def fetch(url, timeout=20):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+    req = urllib.request.Request(url, headers={"User-Agent": UA,
+                                               "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read(MAX_CHARS * 8).decode("utf-8", "replace")
 
 
 def read_index(date):
-    """从 INDEX.md 里取出 (name, url) 列表。"""
     path = ROOT / "sources" / date / "raw" / "INDEX.md"
     if not path.is_file():
         return []
@@ -77,8 +87,7 @@ def read_index(date):
 
 
 def slug_for(name, url):
-    base = name.strip().lower()
-    base = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", base)[:60].strip("-")
+    base = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", name.strip().lower())[:60].strip("-")
     if not base:
         base = re.sub(r"[^a-z0-9]+", "-", urlsplit(url).path.lower())[:60].strip("-")
     return base or "item"
@@ -87,8 +96,7 @@ def slug_for(name, url):
 def main():
     ap = argparse.ArgumentParser(description="抓文章正文")
     ap.add_argument("date")
-    ap.add_argument("--max", type=int, default=18, help="本次最多抓几条（默认 18）")
-    ap.add_argument("--only-zh", action="store_true", help="只抓中文源（infoq/kr36/ithome）")
+    ap.add_argument("--budget", type=int, default=300, help="总耗时上限秒数（默认 300）")
     args = ap.parse_args()
 
     items = read_index(args.date)
@@ -96,44 +104,48 @@ def main():
         print("没有可用的 INDEX：sources/%s/raw/INDEX.md" % args.date, file=sys.stderr)
         return 1
 
-    ZH = ("infoq", "kr36", "ithome")
     outdir = ROOT / "sources" / args.date / "articles"
     outdir.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + args.budget
 
     done = skipped = failed = 0
-    for name, url in items:
-        if done >= args.max:
-            break
-        host = urlsplit(url).netloc.lower()
-        if any(h in host for h in SKIP_HOSTS):
-            skipped += 1
-            continue
-        if args.only_zh and not any(name.startswith(z) for z in ZH):
-            skipped += 1
-            continue
-        slug = slug_for(name, url)
-        dest = outdir / (slug + ".md")
-        if dest.is_file() and dest.stat().st_size > 400:
-            skipped += 1
-            continue
-        try:
-            status, raw = fetch(url)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            print("[失败] %s %s: %s" % (name, type(exc).__name__, exc), flush=True)
-            failed += 1
-            continue
-        paras = paragraphs(raw)
-        if not paras:
-            print("[空] %s 无可识别正文" % name, flush=True)
-            failed += 1
-            continue
-        body = "\n\n".join(paras)[:MAX_CHARS]
-        dest.write_text("# %s\n\n> 原文：%s\n> 抓取：%s\n\n%s\n" %
-                        (name, url, time.strftime("%Y-%m-%d %H:%M"), body), encoding="utf-8")
-        print("[成功] %-28s %d 段 / %d 字" % (name[:28], len(paras), len(body)), flush=True)
-        done += 1
+    for label, prefixes, quota in GROUPS:
+        picked = [(n, u) for n, u in items if any(n.startswith(p) for p in prefixes)][:quota]
+        got = 0
+        for name, url in picked:
+            if time.time() > deadline:
+                print("[跳过] %s %s：超出时间预算" % (label, name[:28]))
+                skipped += 1
+                continue
+            host = urlsplit(url).netloc.lower()
+            if any(h in host for h in SKIP_HOSTS):
+                skipped += 1
+                continue
+            dest = outdir / (slug_for(name, url) + ".md")
+            if dest.is_file() and dest.stat().st_size > 400:
+                skipped += 1
+                got += 1
+                continue
+            try:
+                status, raw = fetch(url)
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                print("[失败] %s %s: %s" % (name[:28], type(exc).__name__, exc), flush=True)
+                failed += 1
+                continue
+            paras = paragraphs(raw)
+            if not paras:
+                print("[空] %s 无可识别正文" % name[:28], flush=True)
+                failed += 1
+                continue
+            body = "\n\n".join(paras)[:MAX_CHARS]
+            dest.write_text("# %s\n\n> 原文：%s\n> 抓取：%s\n\n%s\n" %
+                            (name, url, time.strftime("%Y-%m-%d %H:%M"), body), encoding="utf-8")
+            print("[成功] %-28s %d 段 / %d 字" % (name[:28], len(paras), len(body)), flush=True)
+            done += 1
+            got += 1
+        print("[配额] %s：目标 %d 条，拿到 %d 条" % (label, quota, got), flush=True)
 
-    print("完成：抓取 %d 条，跳过 %d，失败 %d；目录 %s" % (done, skipped, failed, outdir))
+    print("完成：新建 %d 条，跳过 %d，失败 %d；目录 %s" % (done, skipped, failed, outdir))
     return 0
 
 

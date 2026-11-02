@@ -34,6 +34,12 @@ SOURCES = {
     "infoq": ("https://www.infoq.cn/feed", "infoq.xml"),
     "kr36": ("https://www.36kr.com/feed", "kr36.xml"),
     "ithome": ("https://www.ithome.com/rss/", "ithome.xml"),
+    # 中文 AI 垂直媒体（2026-11-02 实测：qbitai 不带结尾斜杠才 200，带斜杠会 000）
+    "qbitai": ("https://www.qbitai.com/feed", "qbitai.xml"),
+    "sinatech": ("https://rss.sina.com.cn/tech/rollnews.xml", "sinatech.xml"),
+    # 英文科技媒体（补充行业面，非纯论文）
+    "techcrunch": ("https://techcrunch.com/feed/", "techcrunch.xml"),
+    "thedecoder": ("https://the-decoder.com/feed/", "thedecoder.xml"),
     "hn": ("https://hacker-news.firebaseio.com/v0/topstories.json", "hn-topstories.json"),
     "tldr": ("https://tldr.tech/ai", "tldr.html"),
     "substack": ("https://importai.substack.com/feed", "substack.xml"),
@@ -45,6 +51,7 @@ SOURCE_PRIORITY = {
     "qwen": "archive", "lilian": "P0", "deepseek": "P0",
     "hn": "P1", "tldr": "P1", "simon": "P1", "substack": "P1",
     "infoq": "P1", "kr36": "P1", "ithome": "P1",
+    "qbitai": "P0", "sinatech": "P1", "techcrunch": "P1", "thedecoder": "P1",
 }
 RETRIES_BY_PRIORITY = {"P0": 3, "P1": 1, "archive": 1}
 
@@ -416,7 +423,8 @@ class Run:
             rows += ["本轮没有成功素材，详见 ../fetch-status.md。", ""]
         self.write_if_changed(self.raw_dir / "INDEX.md", "\n".join(rows).rstrip() + "\n")
         primary = [entries[k] for k in ("anthropic", "openai", "arxiv", "lilian", "deepseek",
-                                        "infoq", "kr36", "ithome",
+                                        "infoq", "kr36", "ithome", "qbitai", "sinatech",
+                                        "techcrunch", "thedecoder",
                                         "hn-top", "tldr", "substack", "simon") if k in entries]
         ok = sum(m["state"] in ("ok", "empty") for m in primary)
         failures = [(k, v) for k, v in sorted(entries.items()) if v["state"] == "failed"]
