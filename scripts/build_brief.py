@@ -3,21 +3,19 @@
 
 用法：
     python scripts/build_brief.py 2026-11-08
-    python scripts/build_brief.py 2026-11-08 --limit 6       # 论文条数上限（省钱调试）
-    python scripts/build_brief.py 2026-11-08 --dry 3         # 只看第 3 块的素材够不够
+    python scripts/build_brief.py 2026-11-08 --limit 6     # 论文条数上限（省钱调试）
+    python scripts/build_brief.py 2026-11-08 --dry 2       # 只看第 2 块的素材够不够
 
 环境变量（GitHub Actions 里用 secrets / vars 注入，不写进仓库）：
-    LLM_BASE_URL  例 https://api.a-piko.top/v1
-    LLM_API_KEY   模型 key
-    LLM_MODEL     例 gpt-6.1-sol
+    LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 
-设计依据：reports/2026-11-02-源扩展与降级设计.md v1.2 + AGENTS.md §十一（收录优先级与价值信号）
+设计依据：reports/2026-11-02-源扩展与降级设计.md + AGENTS.md §十一（收录优先级与价值信号）
 用户口径（2026-11-02）：地铁 50 分钟、要详细、要广、不按「对我有没有用」筛。
 
-为什么要分三次写：
-    单次调用写 7000–9000 字，模型会自己缩水到 3000 字（2026-11-02 实测 3288 汉字）。
-    拆成「论文与技术 / 中文与社区 / 官方与产业」三次，每次只写一块、字数目标明确，
-    再由一次轻量编辑把速览、本周看点、收尾补上。
+两次实测换来的两条经验：
+1. 单次调用写 7000–9000 字，模型会缩水到 3300 字 → 拆成三块，每块给明确字数目标。
+2. 只用 INDEX 摘录，中文源每家只有 1 条 → 回到 RSS 解析逐条素材（feeds.py），
+   中文动态才凑得出条数。
 """
 import argparse
 import datetime as dt
@@ -30,63 +28,57 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import feeds
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------- 写作规范
 
 COMMON_RULES = """## 硬规则（违反任意一条就算不合格）
-- 数字、名单、机构名、日期只能来自素材原文；素材没给的写「素材未提供」，**一个都不许编**。
+- 数字、名单、机构名、日期只能来自素材原文；素材没给的就不写这个数字，**一个都不许编**。
 - 小数只能照抄素材：素材写「约四成」就写「约四成」，不许换算成 40%。
 - 属于传闻、爆料、未官宣的，必须在 ⚠️ 边界里写明「未获官方确认」。
 - 不许写「值得关注」「建议收藏」「意义重大」这类空话；要判断就给能被指认的一句判断。
 - 中文标题保留原文，不要翻译成英文再翻回来。
 - 禁止表格、禁止代码块、禁止「接上文」。
 - 不要写「需要我帮你整理明天的吗」这类对话式结尾，这是发布页不是聊天。
-- 素材里只有标题没有正文的，标 `仅标题，正文未取到`，不要按标题瞎猜内容。"""
+- **「素材未提供」全文最多出现两次**。素材不够支撑一条深读就别写这条，宁可少一条，不要写一条全是免责声明的水条。"""
 
 DEEP_RULES = """## 每条深读的格式（四段必须齐全，缺一段视为没写完）
 ### 标题（标题里带关键数字或结论）
 **发生了什么**：2–3 句，谁做了什么。
-**关键细节**：4–6 句或 3–5 个短点——机制怎么走、数字带单位和基准、名单写到机构名、条件写清「只有满足 X 才 Y」。
-**⚠️ 边界**：哪一步可能错、什么条件下不成立、哪里容易误读。不要用「未官宣」当免责装饰。
+**关键细节**：4–6 句或 3–5 个短点——机制怎么走、数字带单位和基准、名单写到机构名、条件写清「只有满足 X 才 Y」。素材里的原文细节要翻译成中文讲清楚，不要只复述标题。
+**⚠️ 边界**：哪一步可能错、什么条件下不成立、哪里容易误读。写具体疑点，不要用「未官宣」当免责装饰。
 **一句话点评**：1–2 句，明确站边的判断，读者要能看出这是推论而不是报道内容。
 来源：域名
 
-每条 **320–420 个汉字**（不含标点、链接、小标题）。「关键细节」不足 4 句就是没写完，
+每条 **380–500 个汉字**（不含标点、链接、小标题）。「关键细节」不足 4 句就是没写完，
 继续补机制、补数字、补对比、补限制条件——**不要靠增加条数凑字数**。"""
 
-SHORT_RULES = """## 短条目的格式（1–2 句，不展开）
-- **一句话事实**：关键数字或细节 → 一句判断
+SHORT_RULES = """## 短条目的格式（每条 2–3 句，比速览厚）
+- **一句话事实**（加粗标题带数字或结论）：第 1 句给事实和细节，第 2 句给条件或对比，第 3 句给判断。
+- 每条 **120–200 字**，必须带一个具体信息（数字、机构名、日期、金额、比例）。
+- 短条目是「其余值得知道的」，不要在这里重复本块深读讲过的事。"""
 
-短条目也不许空话，每条至少带一个具体信息（数字、机构名、日期、金额、比例）。"""
 
-
-def bucket_prompt(date, name, body, target, deep, short):
+def bucket_prompt(date, name, heading, body, target, deep, short, extra=""):
     return """今天是 {date}。你是中文 AI 早报主编，这一轮**只写下面这一块**：{name}。
 
-整份早报正文目标 7000–9000 字（读者在地铁上读 40–50 分钟，随时到站放下）。
+整份早报正文目标 10000–11000 字（读者在地铁上读 40–50 分钟，随时到站放下）。
 **这一块负责 {target} 字**。写不到这个量就是没写完——回去把每条写厚（补机制、数字、对比、限制条件），
 不是少写几条，也不是灌水复述。
 
-结构：
-```
-## 📰 板块名（自己起，如「论文与架构」「中文动态」「产业与资本」）
-### 深读条目标题
-（按四段格式）
-- 短条目若干
-```
-
-本块计划：{deep} 条深读 + {short} 条短条目。素材撑不起这么多深读时，就少写深读、把短条目写足，
-并在本块末尾用一行 `> 素材不足：<哪一类没内容>` 说明。
-
+开头写板块标题：`{heading}`
+本块计划：{deep} 条深读 + {short} 条短条目。
+{extra}
 {rules}
 
 {rules2}
 
 ## 素材（只准用这些）
 {material}
-""".format(date=date, name=name, target=target, deep=deep, short=short,
-           rules=DEEP_RULES, rules2=COMMON_RULES, material=body)
+""".format(date=date, name=name, heading=heading, target=target, deep=deep, short=short,
+           extra=extra, rules=DEEP_RULES, rules2=COMMON_RULES, material=body)
 
 
 EDITOR_PROMPT = """下面是今天（{date}）早报正文的初稿，分 {k} 块，正文约 {n} 字。
@@ -94,8 +86,9 @@ EDITOR_PROMPT = """下面是今天（{date}）早报正文的初稿，分 {k} �
 请**只输出三块内容**，不要重复也不要改写正文：
 
 1. `## 🚇 3 分钟速览（今天记这几条）`
-   6 条，编号列表，每条格式：`**一句话事实**：关键数字或细节 → 一句判断`，每条 40–70 字，不许展开。
-   这 6 条要覆盖不同板块，不要都来自同一块。
+   8 条，编号列表，每条格式：`**一句话事实**：关键数字或细节 → 一句判断`，每条 40–70 字。
+   **不要写「一句话点评：」这几个字**，判断直接用「→」接在后面。
+   8 条要覆盖不同板块（论文 / 中文 / 官方 / 社区都要有），不要都来自同一块。
 
 2. `## 🔭 本周看点`
    只有当正文里确实出现**确定日期**的事件时才写，3–5 行：`- 时间｜事件｜关注点`。
@@ -117,7 +110,13 @@ def clean(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+HUBS = {"anthropic", "openai", "arxiv", "deepseek", "qwen", "lilian", "simon",
+        "tldr", "substack", "hn-top", "infoq", "kr36", "ithome", "qbitai",
+        "sinatech", "techcrunch", "thedecoder"}
+
+
 def parse_index(raw_dir):
+    """INDEX.md 的逐条 sections（Anthropic 逐篇、HN 逐帖、技术博客）。"""
     path = raw_dir / "INDEX.md"
     if not path.is_file():
         return []
@@ -126,14 +125,19 @@ def parse_index(raw_dir):
     for block in blocks[1:]:
         name, _, rest = block.partition("\n")
         name = name.strip()
+        if name in HUBS:          # 源首页/整份 RSS 的合并小节，不是一篇文章
+            continue
         url = re.search(r"- URL：(\S+)", rest)
-        excerpt = re.search(r"原文摘录：\n> (.*)", rest, re.S)
+        excerpt = re.search(r"- 原文摘录：\n> (.*)", rest, re.S)
         body = clean(excerpt.group(1))[:2000] if excerpt else ""
         if not body:
             continue
-        out.append({"source": name.split("-")[0], "name": name,
-                    "title": name, "url": url.group(1) if url else "", "text": body})
+        out.append({"name": name, "title": name,
+                    "url": url.group(1) if url else "", "text": body})
     return out
+
+
+ARXIV_SKIP = ("cs.CL",)
 
 
 def parse_arxiv(raw_dir, limit=14):
@@ -150,7 +154,7 @@ def parse_arxiv(raw_dir, limit=14):
         pub = re.search(r"<published>(.*?)</published>", blk)
         if not title or not summ:
             continue
-        items.append({"source": "arxiv", "name": "", "title": clean(title.group(1)),
+        items.append({"name": "", "title": clean(title.group(1)),
                       "url": (link.group(1) if link else "").strip(),
                       "date": (pub.group(1)[:10] if pub else ""),
                       "text": clean(summ.group(1))[:2400]})
@@ -159,38 +163,40 @@ def parse_arxiv(raw_dir, limit=14):
     return items
 
 
-RAW_DIR_HINT = []
+ARTICLE_INDEX = {}
 
 
-def article_text(name, fallback):
-    """优先读 extract_articles.py 抓下来的正文；没有就退回索引摘录。"""
-    if not RAW_DIR_HINT or not name:
-        return fallback
-    art = RAW_DIR_HINT[0].parent / "articles"
+def load_articles(raw_dir):
+    """extract_articles.py 产出的正文，按 URL 建索引。"""
+    art = raw_dir.parent / "articles"
     if not art.is_dir():
-        return fallback
-    key = re.sub(r"[^a-z0-9一-鿿]+", "-", name.lower()).strip("-")
-    best = None
+        return {}
+    out = {}
     for path in art.glob("*.md"):
-        stem = path.stem.lower()
-        if stem == key or stem.startswith(key[:24]) or key.startswith(stem[:24]):
-            if best is None or path.stat().st_size > best.stat().st_size:
-                best = path
-    if best is None:
-        return fallback
-    try:
-        body = best.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return fallback
-    body = "\n".join(l for l in body.splitlines() if l.strip() and not l.startswith(("#", ">")))
-    return body[:4000] if len(body) > len(fallback) else fallback
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        m = re.search(r"^> 原文：(\S+)", text, re.M)
+        if not m:
+            continue
+        body = "\n".join(l for l in text.splitlines()
+                         if l.strip() and not l.startswith(("#", ">")))
+        if len(body) > 400:
+            out[m.group(1).strip()] = body[:4000]
+    return out
 
 
-def render(items, budget=90000):
+def body_of(item, fallback, cache):
+    return cache.get(item.get("url", ""), fallback)
+
+
+def render(items, cache, budget=110000):
     parts, total = [], 0
     for it in items:
-        full = article_text(it.get("name") or "", it["text"])
-        block = "- 标题：%s\n  URL：%s\n  正文：%s\n" % (it["title"], it.get("url", ""), full)
+        full = body_of(it, it["text"], cache)
+        when = ("  时间：%s\n" % it["date"]) if it.get("date") else ""
+        block = "- 标题：%s\n%s  URL：%s\n  正文：%s\n" % (it["title"], when, it.get("url", ""), full)
         if total + len(block) > budget:
             break
         parts.append(block)
@@ -199,37 +205,43 @@ def render(items, budget=90000):
 
 
 def gather(raw_dir, limit=None):
-    """按 AGENTS §十一 组织素材：论文 → 一手技术文 → 社区 → 公告，并分成三块。"""
-    papers = parse_arxiv(raw_dir, limit or 14)
+    """按 AGENTS §十一 排序素材，再分成三块。"""
     idx = parse_index(raw_dir)
+    cache = load_articles(raw_dir)
 
     def pick(prefixes, n):
         return [x for x in idx if any(x["name"].startswith(p) for p in prefixes)][:n]
 
-    tech = pick(["lilian", "deepseek", "qwen", "simon"], 4)
-    CN_KW = ("AI", "大模型", "模型", "智能体", "Agent", "LLM", "GPT", "Claude", "Gemini",
-             "推理", "训练", "多模态", "开源", "算力", "芯片", "微调", "RAG", "向量", "提示词")
-    cn = [x for x in pick(["qbitai", "infoq", "kr36", "ithome", "sinatech"], 30)
-          if any(k.lower() in (x["text"][:400] + x["title"]).lower() for k in CN_KW)][:9]
-    en_media = [x for x in pick(["techcrunch", "thedecoder"], 14)
-                if any(k.lower() in (x["text"][:400] + x["title"]).lower()
-                       for k in ("ai", "model", "agent", "llm", "openai", "anthropic", "gpt"))][:5]
-    hn = pick(["hn-story"], 5)
-    official = pick(["anthropic", "openai"], 10)
-    other = pick(["tldr"], 2)
+    papers = parse_arxiv(raw_dir, limit or 14)
+    tech = pick(["lilian", "deepseek", "qwen"], 4)
 
-    if limit:
-        papers = papers[:limit]
+    cn_files = ["qbitai.xml", "infoq.xml", "kr36.xml", "ithome.xml", "sinatech.xml"]
+    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 6) for f in cn_files]
+    cn = feeds.round_robin(cn_groups, 3)[:14]
+
+    en_files = ["techcrunch.xml", "thedecoder.xml"]
+    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 6) for f in en_files]
+    en_media = feeds.round_robin(en_groups, 3)[:6]
+
+    hn = pick(["hn-story"], 5)
+    official = pick(["anthropic"], 10) + pick(["openai"], 3)
+    other = pick(["tldr"], 1)
 
     b1 = papers + tech
     b2 = cn + en_media + hn
     b3 = official + other
-    return [("论文与技术长文", b1, "3000", 5, 4),
-            ("中文动态、英文科技媒体与社区讨论", b2, "2600", 4, 6),
-            ("官方公告与产业", b3, "2200", 4, 5)]
+    return [
+        ("论文与技术长文", "## 📰 论文与架构（arXiv cs.CL / 一手技术文）", b1, "4200", 7, 5, ""),
+        ("中文动态与英文科技媒体", None, b2, "3800", 5, 8,
+         "本块要拆成两个板块，依次输出：\n"
+         "`## 📰 中文动态`（量子位 / InfoQ / 36氪 / IT之家 / 新浪科技，**至少 5 条**，保留中文标题原文）\n"
+         "`## 📰 英文媒体与社区`（TechCrunch / The Decoder / Hacker News）\n"
+         "同一事件中英文都有时，用中文报道补国内厂商动作、资本与政策细节。"),
+        ("官方公告与产业", "## 📰 官方公告与产业", b3, "2800", 4, 6, ""),
+    ]
 
 
-def call_llm(messages, base_url, api_key, model, timeout=900, max_tokens=12000):
+def call_llm(messages, base_url, api_key, model, timeout=900, max_tokens=16000):
     body = json.dumps({"model": model, "messages": messages, "temperature": 0.4,
                        "max_tokens": max_tokens, "stream": False}).encode("utf-8")
     req = urllib.request.Request(
@@ -292,14 +304,13 @@ def main():
         print("找不到素材目录 %s，先跑 scripts/fetch.py %s" % (raw_dir, date), file=sys.stderr)
         return 1
     buckets = gather(raw_dir, args.limit)
-    RAW_DIR_HINT.clear()
-    RAW_DIR_HINT.append(raw_dir)
+    cache = load_articles(raw_dir)
 
     if args.dry:
-        name, items, target, deep, short = buckets[args.dry - 1]
-        material = render(items)
+        name, heading, items, target, deep, short, extra = buckets[args.dry - 1]
+        material = render(items, cache)
         print("块 %d %s：%d 条素材，渲染 %d 字符" % (args.dry, name, len(items), len(material)))
-        print(material[:1500])
+        print(material[:2000])
         return 0
 
     base = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
@@ -310,16 +321,17 @@ def main():
         return 1
 
     bodies = []
-    for i, (name, items, target, deep, short) in enumerate(buckets, 1):
+    for i, (name, heading, items, target, deep, short, extra) in enumerate(buckets, 1):
         if not items:
             bodies.append("## 📰 %s\n\n> 素材不足：今天没有可用素材。" % name)
             continue
-        material = render(items)
+        material = render(items, cache)
         print("[%d/%d] %s：%d 条素材、%d 字符，目标 %s 字 ..."
               % (i, len(buckets), name, len(items), len(material), target), flush=True)
         out = sanitize(call_llm([{"role": "system", "content": SYSTEM},
                                  {"role": "user",
-                                  "content": bucket_prompt(date, name, material, target, deep, short)}],
+                                  "content": bucket_prompt(date, name, heading or "（两个板块，见下）",
+                                                           material, target, deep, short, extra)}],
                                 base, key, model))
         print("      实际 %d 汉字" % cn_chars(out), flush=True)
         bodies.append(out)
@@ -332,15 +344,15 @@ def main():
                                  "content": EDITOR_PROMPT.format(date=date, k=len(bodies),
                                                                 n=cn_chars(body),
                                                                 rules=COMMON_RULES, body=body)}],
-                               base, key, model, max_tokens=3000))
+                               base, key, model, max_tokens=4000))
     brief, look, close = split_editor(editor)
 
     total = cn_chars(brief) + cn_chars(body) + cn_chars(look) + cn_chars(close)
-    minutes = max(1, round(total / 300))
+    minutes = max(1, round(total / 250))
     md = ["# %s · 前沿 AI 日报（地铁版）" % date, ""]
     md.append("> 覆盖时间窗：过去 48 小时的论文、官方公告与行业动态（抓取于 %s）" % date)
     md.append("> 阅读建议：先读 3 分钟速览，再按板块深读；每块独立成篇，到站随时能放下。")
-    md.append("> 全文约 %d 分钟（%d 字 ÷ 300 字/分）" % (minutes, total))
+    md.append("> 全文约 %d 分钟（%d 字 ÷ 250 字/分，技术长文按慢读算）" % (minutes, total))
     md.append("")
     if brief:
         md += ["## 🚇 3 分钟速览（今天记这几条）", "", brief, ""]

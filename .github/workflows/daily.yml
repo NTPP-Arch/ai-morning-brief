@@ -33,7 +33,7 @@ jobs:
 
       - name: 抽取文章正文（让素材从摘要变成全文）
         run: |
-          python scripts/extract_articles.py "$DATE" --max 16 || echo "正文抽取部分失败，继续用摘要"
+          python scripts/extract_articles.py "$DATE" --budget 300 || echo "正文抽取部分失败，继续用摘要"
 
       - name: 模型出稿
         env:
