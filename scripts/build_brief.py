@@ -62,6 +62,11 @@ TEMPLATE_HINT = """你要写的是一份「地铁版」早报：读者在通勤�
 - 属于传闻、爆料、未官宣的，必须在 ⚠️ 边界段写清「未获官方确认」。
 - 不许写「值得关注」「建议收藏」这类推荐语；要写判断就写具体的一句话点评。
 - 中文条目用中文标题原文，不要翻译。
+- **每条深读必须带一行来源**：`来源：域名`（从给的 URL 里取域名即可，例 `来源：arxiv.org`）。
+- **小数只能照抄**：素材写「约四成」就写「约四成」，不许换算成 40%、更不许写成 43.3%。只有素材原文出现的数字才能以小数形式出现。
+- **「据报道」「消息称」「社区爆料」不算独立信源**：若某条只有这类来源，必须写「仅二手信源」。
+- **不许拿 ⚠️ 当免责装饰**：写不出具体疑点（哪一步可能错、错在哪）就不要写这条；不要用「未官宣」「待确认」来给不确定的内容降级。
+- **点评必须是能被指认的一句判断**：读者要能看出这是你的推论而非报道内容。复述事实不算点评。
 - 不要写「需要我帮你整理明天的吗」这类对话式结尾，这是发布页不是聊天。"""
 
 
@@ -226,12 +231,40 @@ def main():
     print("素材 %d 组、提示词 %d 字符，调用 %s ..." % (len(sections), len(prompt), model), flush=True)
     md = sanitize(call_llm(prompt, base, key, model))
 
+    # 阅读时长按真实字数算，不信模型自报
+    cn = len(re.findall(r"[\u4e00-\u9fff]", md))
+    minutes = max(1, round(cn / 300))
+    md = re.sub(r"全文(?:预估)?阅读时长[：:]\s*约?\s*[\d\-–~～]+\s*分钟",
+                "全文约 %d 分钟（%d 字 ÷ 300 字/分）" % (minutes, cn), md, count=1)
+
+    # 回查闸门：成稿里的数字与专名必须能在素材里找到
+    gate = ""
+    try:
+        import verify_brief
+        result = verify_brief.check(md, verify_brief.load_material(date),
+                                    max(1, round(len(verify_brief.iter_items(md)) * 0.2)))
+        miss = result["missing_total"]
+        if not result["ok"]:
+            rows = []
+            for item in result["items"]:
+                if not item["missing_total"]:
+                    continue
+                bits = item["missing_numbers"] + item["missing_names"]
+                rows.append("- %s：%s" % (item["title"][:40], "、".join(bits[:6])))
+            gate = ("> ⚠️ **本期回查未通过**：%d 处数字/专名在素材中查不到，已列在文末。"
+                    "请把标出的项当作「待核实」，不要直接引用。\n" % miss)
+            md += "\n\n---\n\n**回查未通过项（素材中查不到）**\n" + "\n".join(rows) + "\n"
+        else:
+            print("回查通过（%d 条，缺失 %d 处）" % (len(result["items"]), miss), flush=True)
+    except Exception as exc:  # 闸门自身故障不能挡住出稿
+        print("回查跳过：%s" % exc, flush=True)
+
     header = ("> 云端自动出稿 · 素材来自 `sources/%s/raw/`（抓取管线产物）\n"
-              "> 生成时间：%s\n\n" % (date, dt.datetime.now().astimezone().isoformat(timespec="minutes")))
+              "> 生成时间：%s\n%s\n" % (date, dt.datetime.now().astimezone().isoformat(timespec="minutes"), gate))
     out_md = Path(args.out) if args.out else ROOT / "briefs" / ("%s.md" % date)
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_md.write_text(header + md + "\n", encoding="utf-8")
-    print("已写 %s（%d 汉字）" % (out_md, len(re.findall(r"[\u4e00-\u9fff]", md))), flush=True)
+    print("已写 %s（%d 汉字，约 %d 分钟）" % (out_md, cn, minutes), flush=True)
 
     html = out_md.with_suffix(".html")
     subprocess.run([sys.executable, str(ROOT / "scripts" / "md-to-phone-html.py"),
