@@ -103,8 +103,7 @@ def bucket_prompt(date, name, heading, body, target, deep, short, extra="", rule
 **这一块负责 {target} 字**。写不到这个量就是没写完——回去把每条写厚（补机制、数字、对比、限制条件），
 不是少写几条，也不是灌水复述。
 
-开头写板块标题：`{heading}`
-本块计划：{deep} 条深读 + {short} 条短条目。
+{heading_line}本块计划：{deep} 条深读 + {short} 条短条目。
 {extra}
 {rules}
 
@@ -112,8 +111,9 @@ def bucket_prompt(date, name, heading, body, target, deep, short, extra="", rule
 
 ## 素材（只准用这些）
 {material}
-""".format(date=date, name=name, heading=heading, target=target, deep=deep, short=short,
-           extra=extra, rules=rules or DEEP_RULES, rules2=COMMON_RULES, material=body)
+""".format(date=date, name=name, target=target, deep=deep, short=short,
+           heading_line=("开头写板块标题：`%s`\n" % heading) if heading else "",
+           extra=extra, rules=rules or NEWS_RULES, rules2=COMMON_RULES, material=body)
 
 
 EDITOR_PROMPT = """下面是今天（{date}）早报正文的初稿，分 {k} 块，正文约 {n} 字。
@@ -274,13 +274,23 @@ def gather(raw_dir, limit=None):
     cn = sorted(cn, key=lambda x: -importance(x["title"]))
     en_media = sorted(en_media, key=lambda x: -importance(x["title"]))
     pool = [x for x in cn + en_media if importance(x["title"]) > 0]
+    def has_body(x):
+        return len(body_of(x, "", cache)) > 600      # 头版必须有正文，否则只能写标题
+
     headline, used = [], {}
-    if pool:                      # 全池最高分必定进头版
-        top = pool[0]
-        src = top.get("url", "").split("/")[2] if "://" in top.get("url", "") else ""
-        headline.append(top)
-        used[src] = 1
-    for x in pool[1:]:
+    for x in pool:
+        if len(headline) >= 3:
+            break
+        if not has_body(x):
+            continue
+        if any(k in x["title"] for k in ("论文", "arXiv", "预印本", "综述", "挑战 Scaling")):
+            continue        # 论文不进头版，放到「论文一句话」
+        src = x.get("url", "").split("/")[2] if "://" in x.get("url", "") else ""
+        if used.get(src, 0) >= 2:
+            continue
+        headline.append(x)
+        used[src] = used.get(src, 0) + 1
+    for x in pool:
         if len(headline) >= 3:
             break
         src = x.get("url", "").split("/")[2] if "://" in x.get("url", "") else ""
