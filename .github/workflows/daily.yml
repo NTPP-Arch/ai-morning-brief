@@ -2,15 +2,13 @@ name: daily-brief
 
 on:
   schedule:
-    # 22:00 UTC = 次日 06:00 北京时间。GitHub 的定时任务可能延迟几分钟到几十
-    # 分钟（高峰期更明显），所以这里提前到 06:00，留出余量。
+    # 22:00 UTC = 次日 06:00 北京时间。
+    # GitHub 定时任务在整点高峰期可能延迟几十分钟，所以留了余量；建议 06:30 后再打开页面。
     - cron: "0 22 * * *"
-  workflow_dispatch:      # 支持手动触发，方便调试
+  workflow_dispatch:      # 手动触发，方便调试
 
 permissions:
-  contents: write         # 把当天成稿提交回仓库
-  pages: write            # 部署 GitHub Pages
-  id-token: write
+  contents: write         # 提交成稿到 docs/，由 Pages 直接托管
 
 concurrency:
   group: daily-brief
@@ -33,7 +31,7 @@ jobs:
           echo "抓取日期：$DATE"
           python scripts/fetch.py "$DATE"
 
-      - name: 生成早报（模型出稿）
+      - name: 模型出稿
         env:
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
@@ -43,9 +41,9 @@ jobs:
           mkdir -p docs
           cp "briefs/$DATE.html" docs/index.html
           cp "briefs/$DATE.html" "docs/$DATE.html"
-          ls -la docs
+          cp "briefs/$DATE.md"   "docs/$DATE.md" || true
 
-      - name: 提交成稿回仓库
+      - name: 提交并由 Pages 发布
         run: |
           git config user.name "brief-bot"
           git config user.email "brief-bot@users.noreply.github.com"
@@ -56,17 +54,3 @@ jobs:
             git commit -m "chore: 早报 $DATE"
             git push
           fi
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
