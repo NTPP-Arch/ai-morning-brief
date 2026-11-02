@@ -92,12 +92,17 @@ def collect(date):
     plan = []
 
     cn_files = ["qbitai.xml", "infoq.xml", "kr36.xml", "ithome.xml", "sinatech.xml"]
-    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 4) for f in cn_files]
-    plan += [("中文", x) for x in feeds.round_robin(cn_groups, 2)[:10]]
+    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 12) for f in cn_files]
+    # 先按新闻价值排序：头条候选必须先拿到全文，否则只能写 RSS 摘要（实测只有 200 字）
+    cn_ranked = sorted([x for g in cn_groups for x in g],
+                       key=lambda x: -feeds.importance(x["title"]))
+    plan += [("中文", x) for x in cn_ranked[:12]]
 
     en_files = ["techcrunch.xml", "thedecoder.xml"]
-    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 4) for f in en_files]
-    plan += [("英文媒体", x) for x in feeds.round_robin(en_groups, 3)[:5]]
+    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 6) for f in en_files]
+    en_ranked = sorted([x for g in en_groups for x in g],
+                       key=lambda x: -feeds.importance(x["title"]))
+    plan += [("英文媒体", x) for x in en_ranked[:6]]
 
     official = [x for x in idx if x["name"].startswith("anthropic")][:6]
     plan += [("官方", x) for x in official]
