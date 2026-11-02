@@ -29,6 +29,7 @@ TEMPLATE_HINT = """你要写的是一份「地铁版」早报：读者在通勤�
 
 ## 整体结构（严格按此顺序，没有对应素材的板块直接省略，不要硬凑）
 
+0. 目标体量：**正文 7000–9000 字**（约 25–30 分钟地铁阅读）。因为读者明确说过「太短不够」，宁可多写板块，不要压条数。
 1. 一级标题：`# {日期} · 前沿 AI 日报（地铁版）`
 2. 开场三行（引用块）：
    - 覆盖时间窗（例：过去 24–48 小时）
@@ -48,7 +49,7 @@ TEMPLATE_HINT = """你要写的是一份「地铁版」早报：读者在通勤�
    - 每条 **320–420 个汉字（不含标点、链接、小标题）**。四个小标都必须写，缺一段视为不合格；「关键细节」段不足 4 句就是没写完，必须继续补机制、数字、对比或限制条件。
 5. `## 🧩 其余板块（每条 2 分钟）`
    - 按「产业与资本 / 终端与机器人 / 安全与治理」等分组
-   - **短条目 8–12 条**，每条 1–2 句，不展开
+   - **短条目不少于 10 条**，每条 1–2 句，不展开
 6. `## 🔭 本周看点`
    - 只有在素材里确实存在确定日期的事件时才写，用「时间｜事件｜关注点」三列
 7. `## 💬 收尾一句话`
@@ -118,6 +119,28 @@ def parse_arxiv(raw_dir, limit=14):
     return items
 
 
+def article_text(raw_dir, name, fallback):
+    """优先读 extract_articles.py 抓下来的正文；没有就退回索引摘录。"""
+    art = raw_dir.parent / "articles"
+    if not art.is_dir():
+        return fallback
+    key = re.sub(r"[^a-z0-9一-鿿]+", "-", name.lower()).strip("-")
+    best = None
+    for path in art.glob("*.md"):
+        stem = path.stem.lower()
+        if stem == key or stem.startswith(key[:24]) or key.startswith(stem[:24]):
+            if best is None or path.stat().st_size > best.stat().st_size:
+                best = path
+    if best is None:
+        return fallback
+    try:
+        body = best.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return fallback
+    body = chr(10).join(l for l in body.splitlines() if l.strip() and not l.startswith(("#", ">")))
+    return body[:4000] if len(body) > len(fallback) else fallback
+
+
 def gather(raw_dir, limit=None):
     """按 AGENTS §十一 的优先级组织素材：论文 → 一手技术文 → 社区 → 公告。"""
     papers = parse_arxiv(raw_dir)
@@ -156,14 +179,18 @@ def gather(raw_dir, limit=None):
     return sections
 
 
+RAW_DIR_HINT = []
+
+
 def build_prompt(sections, date):
     parts = []
     total = 0
     for heading, items in sections:
         parts.append("\n## %s\n" % heading)
         for i, it in enumerate(items, 1):
+            full = article_text(RAW_DIR_HINT[0], it.get("name") or it.get("title", ""), it["text"]) if RAW_DIR_HINT else it["text"]
             block = "- 标题：%s\n  URL：%s\n  正文：%s\n" % (
-                it["title"], it.get("url", ""), it["text"])
+                it["title"], it.get("url", ""), full)
             if total + len(block) > 180000:
                 break
             parts.append(block)
@@ -227,6 +254,8 @@ def main():
         print("缺少 LLM_API_KEY", file=sys.stderr)
         return 1
 
+    RAW_DIR_HINT.clear()
+    RAW_DIR_HINT.append(raw_dir)
     prompt = build_prompt(sections, date)
     print("素材 %d 组、提示词 %d 字符，调用 %s ..." % (len(sections), len(prompt), model), flush=True)
     md = sanitize(call_llm(prompt, base, key, model))
