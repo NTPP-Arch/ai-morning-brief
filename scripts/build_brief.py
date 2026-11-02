@@ -239,6 +239,34 @@ def render(items, cache, budget=110000):
     return "".join(parts)
 
 
+# 头版排序：发布 / 开源 / 融资 / 榜单 权重高；活动预告类直接排除
+WEIGHTS = (("发布", 4), ("官宣", 4), ("开源", 4), ("推出", 3), ("上线", 3),
+           ("融资", 4), ("估值", 3), ("亿美元", 3), ("亿元", 2), ("财报", 3), ("营收", 3),
+           ("份额", 3), ("榜单", 3), ("调用量", 3), ("占比", 2),
+           ("大模型", 2), ("模型", 1), ("智能体", 2), ("GPT", 2), ("Claude", 2),
+           ("Gemini", 2), ("Qwen", 2), ("千问", 2), ("DeepSeek", 2),
+           ("芯片", 2), ("算力", 2), ("机器人", 2), ("眼镜", 2), ("手机", 2),
+           ("政策", 2), ("监管", 2), ("标准", 2), ("漏洞", 2), ("安全", 1),
+           ("超过", 1), ("首次", 2), ("全球", 1),
+           ("灰测", 3), ("曝光", 2), ("爆料", 2), ("泄露", 2), ("开源", 5),
+           ("Agent", 3), ("agent", 3), ("AI", 1), ("LLM", 2),
+           ("OpenAI", 3), ("Anthropic", 3), ("谷歌", 2), ("苹果", 3), ("美团", 3),
+           ("阿里", 2), ("华为", 2), ("英伟达", 3), ("字节", 2), ("腾讯", 2), ("百度", 2))
+NOISE = ("邀请函", "分会场", "报名", "招聘", "直播预告", "活动预告", "征稿",
+         "问卷", "嘉宾揭晓", "倒计时", "抽奖")
+# 合集类（早报/盘点/8点1氪）不当头条，但内容仍进主体
+COLLECT = ("8点1氪", "早报", "晚报", "周报", "盘点", "汇总", "快讯", "日报", "一周")
+
+
+def importance(title):
+    if any(k in title for k in NOISE):
+        return -1
+    score = sum(w for k, w in WEIGHTS if k in title)
+    if any(k in title for k in COLLECT):
+        score -= 8
+    return score
+
+
 def gather(raw_dir, limit=None):
     """按 AGENTS §十一 排序素材，再按「头版 / 产业数据 / 终端治理 / 论文一句话」分成四块。
 
@@ -255,19 +283,38 @@ def gather(raw_dir, limit=None):
     tech = pick(["lilian", "deepseek", "qwen"], 3)
 
     cn_files = ["qbitai.xml", "infoq.xml", "kr36.xml", "ithome.xml", "sinatech.xml"]
-    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 8) for f in cn_files]
-    cn = feeds.round_robin(cn_groups, 4)[:18]
+    cn_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 12) for f in cn_files]
+    cn = feeds.round_robin(cn_groups, 10)
 
     en_files = ["techcrunch.xml", "thedecoder.xml"]
-    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 8) for f in en_files]
+    en_groups = [feeds.ai_filter(feeds.feed_items(raw_dir, f), 10) for f in en_files]
     en_media = feeds.round_robin(en_groups, 4)[:8]
 
     hn = pick(["hn-story"], 4)
     official = pick(["anthropic"], 10) + pick(["openai"], 3)
     other = pick(["tldr"], 1)
 
-    headline = (cn[:4] + en_media[:2])[:4]
-    rest = cn[4:] + en_media[2:]
+    # 按「重要不重要」排序，而不是按 RSS 顺序：发布/开源/融资/榜单优先，
+    # 活动预告、邀请函、分会场这类直接丢掉。
+    cn = sorted(cn, key=lambda x: -importance(x["title"]))
+    en_media = sorted(en_media, key=lambda x: -importance(x["title"]))
+    pool = [x for x in cn + en_media if importance(x["title"]) > 0]
+    headline, used = [], {}
+    if pool:                      # 全池最高分必定进头版
+        top = pool[0]
+        src = top.get("url", "").split("/")[2] if "://" in top.get("url", "") else ""
+        headline.append(top)
+        used[src] = 1
+    for x in pool[1:]:
+        if len(headline) >= 3:
+            break
+        src = x.get("url", "").split("/")[2] if "://" in x.get("url", "") else ""
+        if used.get(src, 0) >= 2:      # 其余同一家最多两条
+            continue
+        headline.append(x)
+        used[src] = used.get(src, 0) + 1
+    rest = [x for x in pool if x not in headline][:20]
+    rest += [x for x in cn + en_media if x not in headline and x not in pool][:4]
     GOV_KW = ("政策", "监管", "补贴", "标准", "备案", "安全", "漏洞", "攻击", "诉讼",
               "合规", "机器人", "芯片", "算力", "硬件", "手机", "眼镜", "终端", "耳机",
               "汽车", "工厂", "机器人", "能源")
