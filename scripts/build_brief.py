@@ -437,7 +437,7 @@ def main():
         try:
             out = sanitize(call_llm([{"role": "system", "content": SYSTEM},
                                      {"role": "user",
-                                      "content": bucket_prompt(date, name, heading or "（两个板块，见下）",
+                                      "content": bucket_prompt(date, name, heading or "",
                                                                material, target, deep, short, extra,
                                                                rules)}],
                                     base, key, model))
