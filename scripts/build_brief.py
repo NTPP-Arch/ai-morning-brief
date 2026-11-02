@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -242,17 +243,31 @@ def gather(raw_dir, limit=None):
     ]
 
 
-def call_llm(messages, base_url, api_key, model, timeout=900, max_tokens=16000):
+def call_llm(messages, base_url, api_key, model, timeout=900, max_tokens=16000, tries=3):
+    """调模型。超时/连接重置重试 3 次；最后一次把 max_tokens 砍半再试，
+    避免单块写太长把网关拖挂（2026-11-02 实测：第三块 2800 字时连接被断）。"""
     body = json.dumps({"model": model, "messages": messages, "temperature": 0.4,
                        "max_tokens": max_tokens, "stream": False}).encode("utf-8")
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/chat/completions", data=body,
-        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8", "replace"))
-    if "choices" not in data:
-        raise RuntimeError("模型返回异常：%s" % json.dumps(data, ensure_ascii=False)[:400])
-    return data["choices"][0]["message"]["content"]
+    last = None
+    for attempt in range(1, tries + 1):
+        cap = max_tokens if attempt < tries else max(2000, max_tokens // 2)
+        if attempt == tries:
+            body = json.dumps({"model": model, "messages": messages, "temperature": 0.4,
+                               "max_tokens": cap, "stream": False}).encode("utf-8")
+        req = urllib.request.Request(
+            base_url.rstrip("/") + "/chat/completions", data=body,
+            headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+            if "choices" not in data:
+                raise RuntimeError("模型返回异常：%s" % json.dumps(data, ensure_ascii=False)[:300])
+            return data["choices"][0]["message"]["content"]
+        except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
+            last = exc
+            print("      第 %d 次调用失败：%s" % (attempt, exc), flush=True)
+            time.sleep(8 * attempt)
+    raise RuntimeError("模型调用连续失败：%s" % last)
 
 
 SYSTEM = ("你是中文 AI 早报主编。你只依据给定素材写作，不编造事实；"
@@ -329,11 +344,16 @@ def main():
         material = render(items, cache)
         print("[%d/%d] %s：%d 条素材、%d 字符，目标 %s 字 ..."
               % (i, len(buckets), name, len(items), len(material), target), flush=True)
-        out = sanitize(call_llm([{"role": "system", "content": SYSTEM},
-                                 {"role": "user",
-                                  "content": bucket_prompt(date, name, heading or "（两个板块，见下）",
-                                                           material, target, deep, short, extra)}],
-                                base, key, model))
+        try:
+            out = sanitize(call_llm([{"role": "system", "content": SYSTEM},
+                                     {"role": "user",
+                                      "content": bucket_prompt(date, name, heading or "（两个板块，见下）",
+                                                               material, target, deep, short, extra)}],
+                                    base, key, model))
+        except RuntimeError as exc:      # 单块失败不拖垮整份早报
+            print("      本块放弃：%s" % exc, flush=True)
+            bodies.append("## 📰 %s\n\n> 本轮出稿失败（%s），这一块缺内容。" % (name, str(exc)[:60]))
+            continue
         print("      实际 %d 汉字" % cn_chars(out), flush=True)
         bodies.append(out)
 
