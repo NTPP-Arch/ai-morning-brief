@@ -402,6 +402,7 @@ def main():
     ap.add_argument("--out", default=None, help="输出 md 路径；默认 briefs/<date>.md")
     ap.add_argument("--limit", type=int, default=None, help="限制论文条数（调试用）")
     ap.add_argument("--dry", type=int, default=None, help="只看第 N 块（1/2/3）的素材，不出稿")
+    ap.add_argument("--force", action="store_true", help="当天已有成稿也重写")
     args = ap.parse_args()
 
     date = args.date
@@ -409,6 +410,13 @@ def main():
     if not raw_dir.is_dir():
         print("找不到素材目录 %s，先跑 scripts/fetch.py %s" % (raw_dir, date), file=sys.stderr)
         return 1
+
+    # 幂等保护：当天已有成稿就跳过，这样定时任务多挂几次也不会重复烧模型
+    out_md = Path(args.out) if args.out else ROOT / "briefs" / ("%s.md" % date)
+    if not args.force and not args.out and out_md.with_suffix(".html").exists():
+        print("今天已有成稿（%s），跳过；要重写请加 --force" % out_md.with_suffix(".html"))
+        return 0
+
     buckets = gather(raw_dir, args.limit)
     cache = load_articles(raw_dir)
 
@@ -499,7 +507,6 @@ def main():
 
     header = ("> 云端自动出稿 · 素材来自 `sources/%s/raw/`（抓取管线产物）\n"
               "> 生成时间：%s\n%s\n" % (date, dt.datetime.now().astimezone().isoformat(timespec="minutes"), gate))
-    out_md = Path(args.out) if args.out else ROOT / "briefs" / ("%s.md" % date)
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_md.write_text(header + md + "\n", encoding="utf-8")
     print("已写 %s（%d 汉字，约 %d 分钟）" % (out_md, total, minutes), flush=True)
